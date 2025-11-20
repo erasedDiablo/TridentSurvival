@@ -1,0 +1,187 @@
+local cheat = {
+    utility = {
+        new_drawing = function(type, args)
+            local obj = Drawing.new(type)
+            for i, v in args do
+                obj[i] = v
+            end
+            return obj
+        end,
+        new_heartbeat = function(callback)
+            return game:GetService("RunService").Heartbeat:Connect(callback)
+        end
+    }
+}
+
+local _FindFirstChildOfClass = game.FindFirstChildOfClass
+local _WorldToViewportPoint = workspace.CurrentCamera.WorldToViewportPoint
+local _Vector2new = Vector2.new
+local camera = workspace.CurrentCamera
+local workspace = cloneref(game:GetService("Workspace"))
+local coreGui = game:GetService("CoreGui")
+
+local esp_table = {
+    __loaded = false,
+    settings = {
+        textSize = 14,
+        textFont = Drawing.Fonts.Plex,
+        maxdistance = 300,
+        distancelimit = false,
+        allowed = { Stone = true, Nitrate = true, Iron = true },
+        ore_colors = {
+            Stone = { Color3.fromRGB(100, 100, 100), 1 },
+            Nitrate = { Color3.fromRGB(200, 200, 200), 1 },
+            Iron = { Color3.fromRGB(255, 165, 0), 1 }
+        },
+        outline_color = Color3.fromRGB(0, 0, 0),
+        outline_enabled = true,
+        chams_enabled = true,
+        chams_visible_only = false,
+        chams_fill_colors = {
+            Stone = { Color3.fromRGB(100, 100, 100), 0.5 },
+            Nitrate = { Color3.fromRGB(200, 200, 200), 0.5 },
+            Iron = { Color3.fromRGB(255, 165, 0), 0.5 }
+        },
+        chams_outline_color = { Color3.fromRGB(255, 255, 255), 0 }
+    }
+}
+
+local ore_identification = {
+    Stone = { MeshId = "rbxassetid://12939036056", ChildCount = 1 },
+    Nitrate = { Color = Color3.fromRGB(248, 248, 248) },
+    Iron = { Color = Color3.fromRGB(199, 172, 120) }
+}
+
+local container = Instance.new("Folder", coreGui.RobloxGui)
+container.Name = "ESPContainer"
+
+local function identify_ore(model)
+    if model.ClassName ~= "Model" then return false, false end
+    local meshpart = _FindFirstChildOfClass(model, "MeshPart")
+    if meshpart and meshpart.MeshId == "rbxassetid://12939036056" then
+        if #model:GetChildren() == 1 then
+            return "Stone", model:GetChildren()[1]
+        else
+            for _, part in model:GetChildren() do
+                if part.Color == ore_identification.Nitrate.Color then
+                    return "Nitrate", part
+                elseif part.Color == ore_identification.Iron.Color then
+                    return "Iron", part
+                end
+            end
+        end
+    end
+    return false, false
+end
+
+local function worldToScreen(world)
+    local screen, inBounds = _WorldToViewportPoint(camera, world)
+    return _Vector2new(screen.X, screen.Y), inBounds
+end
+
+local loaded_ores = {}
+local function create_ore_esp(model)
+    local ore_name, mainpart = identify_ore(model)
+    if not (ore_name and mainpart and esp_table.settings.allowed[ore_name]) then return end
+
+    loaded_ores[model] = {
+        obj = {
+            label = cheat.utility.new_drawing("Text", {
+                Center = true,
+                Visible = false,
+                Text = ore_name,
+                Size = esp_table.settings.textSize,
+                Font = esp_table.settings.textFont,
+                Color = esp_table.settings.ore_colors[ore_name][1],
+                Transparency = esp_table.settings.ore_colors[ore_name][2],
+                Outline = esp_table.settings.outline_enabled,
+                OutlineColor = esp_table.settings.outline_color
+            })
+        },
+        chams = Instance.new("Highlight", container)
+    }
+
+    local ore = loaded_ores[model]
+    local label = ore.obj.label
+    local chams = ore.chams
+    local setvis_cache = false
+
+    chams.Adornee = model
+    chams.DepthMode = esp_table.settings.chams_visible_only and Enum.HighlightDepthMode.Occluded or Enum.HighlightDepthMode.AlwaysOnTop
+    chams.FillColor = esp_table.settings.chams_fill_colors[ore_name][1]
+    chams.FillTransparency = esp_table.settings.chams_fill_colors[ore_name][2]
+    chams.OutlineColor = esp_table.settings.chams_outline_color[1]
+    chams.OutlineTransparency = esp_table.settings.chams_outline_color[2]
+    chams.Enabled = esp_table.settings.chams_enabled
+
+    ore.connection = cheat.utility.new_heartbeat(function()
+        if not (mainpart and esp_table.settings.allowed[ore_name]) then
+            if setvis_cache then
+                label.Visible = false
+                chams.Enabled = false
+                setvis_cache = false
+            end
+            return
+        end
+
+        local distance = (camera.CFrame.Position - mainpart.Position).Magnitude
+        if esp_table.settings.distancelimit and distance > esp_table.settings.maxdistance then
+            if setvis_cache then
+                label.Visible = false
+                chams.Enabled = false
+                setvis_cache = false
+            end
+            return
+        end
+
+        local position, onscreen = worldToScreen(mainpart.Position)
+        if not onscreen then
+            if setvis_cache then
+                label.Visible = false
+                chams.Enabled = false
+                setvis_cache = false
+            end
+            return
+        end
+
+        if not setvis_cache then
+            label.Visible = true
+            chams.Enabled = esp_table.settings.chams_enabled
+            setvis_cache = true
+        end
+        label.Position = position
+    end)
+end
+
+local function destroy_ore_esp(model)
+    local ore = loaded_ores[model]
+    if not ore then return end
+    ore.connection:Disconnect()
+    ore.obj.label:Remove()
+    if ore.chams then
+        ore.chams:Destroy()
+    end
+    loaded_ores[model] = nil
+end
+
+function esp_table.load()
+    if esp_table.__loaded then return end
+    for _, v in workspace:GetChildren() do
+        create_ore_esp(v)
+    end
+    esp_table.oreAdded = workspace.ChildAdded:Connect(create_ore_esp)
+    esp_table.oreRemoving = workspace.ChildRemoved:Connect(destroy_ore_esp)
+    esp_table.__loaded = true
+end
+
+function esp_table.unload()
+    if not esp_table.__loaded then return end
+    for _, v in workspace:GetChildren() do
+        destroy_ore_esp(v)
+    end
+    esp_table.oreAdded:Disconnect()
+    esp_table.oreRemoving:Disconnect()
+    esp_table.__loaded = false
+end
+
+esp_table.load()
